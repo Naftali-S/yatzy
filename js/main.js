@@ -15,6 +15,11 @@ const messageText = document.getElementById("message");
 const roundStatus = document.getElementById("round-status");
 const rollsLeftBox = document.getElementById("rolls-left");
 const rollMarkers = rollsLeftBox.querySelectorAll(".roll-marker");
+const scoreRows = document.querySelectorAll("tr[data-category]");
+const upperTotalCell = document.getElementById("upper-total");
+const bonusCell = document.getElementById("bonus");
+const lowerTotalCell = document.getElementById("lower-total");
+const grandTotalCell = document.getElementById("grand-total");
 
 // pip positions
 const PIP_LAYOUTS = {
@@ -40,6 +45,7 @@ function render(rolledIndexes = []) {
   renderDice(rolledIndexes);
   renderRollsLeft();
   renderControls();
+  renderScorecard();
 }
 
 /**
@@ -119,6 +125,71 @@ function renderControls() {
 }
 
 /**
+ * Draws the scorecard: scored boxes, previews for open boxes,
+ * the selected box and the totals
+ */
+function renderScorecard() {
+  const scores = game.scoreTable;
+  const previews = game.previewScores; // empty before the first roll
+
+  scoreRows.forEach((row) => {
+    const category = row.dataset.category;
+    const cell = row.querySelector(".score");
+
+    // Start from a clean row, then add back the classes that apply
+    row.classList.remove("open", "filled", "selected");
+    cell.classList.remove("preview");
+
+    if (scores[category] !== null) {
+      // Already scored: show the locked-in score
+      row.classList.add("filled");
+      row.removeAttribute("tabindex"); // can't be chosen again
+      cell.textContent = scores[category];
+    } else if (category in previews && !game.isOver) {
+      // Open this turn: show what the dice would score
+      row.classList.add("open");
+      row.tabIndex = 0; // reachable with Tab
+      cell.classList.add("preview");
+      cell.textContent = previews[category];
+
+      if (category === selectedCategory) {
+        row.classList.add("selected");
+      }
+    } else {
+      // Not scored, and no roll yet this turn
+      row.removeAttribute("tabindex");
+      cell.textContent = "";
+    }
+  });
+
+  upperTotalCell.textContent = game.upperTotal;
+  bonusCell.textContent = game.bonus;
+  lowerTotalCell.textContent = game.lowerTotal;
+  grandTotalCell.textContent = game.totalScore;
+}
+
+/**
+ * Gets a box's name from its scorecard row.
+ * @param {HTMLTableRowElement} row
+ * @returns {string}
+ */
+function categoryName(row) {
+  return row.cells[0].firstChild.textContent.trim();
+}
+
+/**
+ * Writes a score as "1 point" or "12 points".
+ * @param {number} points
+ * @returns {string}
+ */
+function pointsText(points) {
+  if (points === 1) {
+    return "1 point";
+  }
+  return `${points} points`;
+}
+
+/**
  * Shows a prompt in the message bar.
  * @param {string} text
  */
@@ -144,7 +215,7 @@ function handleRoll() {
     showMessage(error.message);
     return;
   }
-
+  selectedCategory = null; // Dice change so player chooses again
   render(rolledIndexes);
   showMessage(rollMessage());
 }
@@ -165,7 +236,7 @@ function rollMessage() {
 }
 
 /**
- * Clicking a die keeps it (or releases it) fromt he next roll.
+ * Clicking a die keeps it (or releases it) from the next roll.
  * @param {MouseEvent} event
  */
 function handleDieClick(event) {
@@ -179,9 +250,78 @@ function handleDieClick(event) {
   renderDice();
 }
 
+/**
+ * Clicking an open scorecard box selects it (clicking it again unselects it).
+ * The score isn't recorded until the player presses End Turn.
+ * @param {Event} event
+ */
+function handleScoreClick(event) {
+  const row = event.currentTarget;
+  if (!row.classList.contains("open")) {
+    return; // already scored, or no roll yet
+  }
+
+  const category = row.dataset.category;
+  if (selectedCategory === category) {
+    selectedCategory = null;
+    showMessage("Choose a box to score, then press End Turn.");
+  } else {
+    selectedCategory = category;
+    const points = game.previewScores[category];
+    showMessage(
+      `${categoryName(row)} for ${pointsText(points)}. Press End Turn to score it.`,
+    );
+  }
+
+  renderScorecard();
+  renderControls();
+}
+
+/**
+ * Lets keyboard players select a box with Enter or Space.
+ * @param {KeyboardEvent} event
+ */
+function handleScoreKey(event) {
+  if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault(); // Stop Space from scrolling the page
+    handleScoreClick(event);
+  }
+}
+
+/**
+ * End Turn: records the selected box and moves on to the next round.
+ */
+function handleEndTurn() {
+  if (selectedCategory === null) {
+    return;
+  }
+
+  const row = document.querySelector(`tr[data-category="${selectedCategory}"]`);
+  let score;
+  try {
+    score = game.endTurn(selectedCategory);
+  } catch (error) {
+    showMessage(error.message);
+    return;
+  }
+
+  selectedCategory = null;
+  render();
+  showMessage(
+    `${categoryName(row)}: ${pointsText(score)}. Roll the dice to start round ${game.currentRound}.`,
+  );
+}
+
 // --- Event listeners ---
 
 rollButton.addEventListener("click", handleRoll);
+
+endTurnButton.addEventListener("click", handleEndTurn);
+
+scoreRows.forEach((row) => {
+  row.addEventListener("click", handleScoreClick);
+  row.addEventListener("keydown", handleScoreKey);
+});
 
 diceButtons.forEach((button) => {
   button.addEventListener("click", handleDieClick);

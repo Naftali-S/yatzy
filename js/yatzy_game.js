@@ -140,6 +140,27 @@ export class YatzyGame {
   }
 
   /**
+   * @returns {number} the current player's upper section total (ones to sixes)
+   */
+  get upperTotal() {
+    return this.#currentEngine.upperTotal;
+  }
+
+  /**
+   * @returns {number} the current player's bonus (50 or 0)
+   */
+  get bonus() {
+    return this.#currentEngine.bonus;
+  }
+
+  /**
+   * @returns {number} the current player's lower section total
+   */
+  get lowerTotal() {
+    return this.#currentEngine.lowerTotal;
+  }
+
+  /**
    * @returns {Object<string, (number|null)>} the current player's score table
    */
   get scoreTable() {
