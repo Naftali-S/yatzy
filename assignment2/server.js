@@ -1,49 +1,43 @@
 /**
  * server.js
- * Express server for the Yatzy game.
- * - Serves the game (HTML, CSS, client JS) from the public folder
- * - Rolls the dice: GET /roll-dices returns five random dice values
+ * Express server for the Yatzy game (Assignment 2).
+ * - Serves the page (HTML, CSS, client JS) from the public folder
+ * - Provides the game API under /api/games (see routes/games.js)
+ * All dice rolls, rules and scoring happen on the server.
  */
 
 import path from "node:path";
 import express from "express";
+import gamesRouter from "./routes/games.js";
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
-const DICE_COUNT = 5;
-const SIDES = 6;
+// Read JSON request bodies into req.body
+app.use(express.json());
 
-// Serve index.html, css, and js from the public folder
+// Serve index.html, css and js from the public folder
 app.use(express.static(path.join(import.meta.dirname, "public")));
 
-/**
- * Rolls a single die. (Moved here from the Dice class's roll().)
- * @returns {number} a random whole number from 1 to 6
- */
-function rollDie() {
-    return Math.floor(Math.random() * SIDES) + 1;
-}
+// Game API
+app.use("/api/games", gamesRouter);
 
-/**
- * Rolls all five dice.
- * @returns {number[]} five random dice values, e.g. [3, 6, 1, 1, 4]
- */
-function rollDice() {
-    const values = Array(DICE_COUNT);
-    for (let i = 0; i < DICE_COUNT; i++) {
-        values[i] = rollDie();
-    }
-    return values;
-}
+// Any other /api address doesn't exist: answer in JSON, not an HTML page
+app.use("/api", (req, res) => {
+  res.status(404).json({ error: `No API endpoint for ${req.method} ${req.originalUrl}` });
+});
 
-// GET /roll-dices -> [3, 6, 1, 1, 4]
-app.get("/roll-dices", (req, res) => {
-    const values = rollDice();
-    console.log(`Rolled: ${values.join(", ")}`);
-    res.json(values);
+// Error handler (the 4 parameters tell Express this one handles errors).
+// Catches badly formed JSON in a request (400) and any unexpected bug (500).
+app.use((error, req, res, next) => {
+  if (error.status >= 400 && error.status < 500) {
+    res.status(error.status).json({ error: error.message });
+    return;
+  }
+  console.error(error);
+  res.status(500).json({ error: "Something went wrong on the server." });
 });
 
 app.listen(PORT, () => {
-    console.log(`Yatzy server running at http://localhost:${PORT}`);
+  console.log(`Yatzy server running at http://localhost:${PORT}`);
 });
