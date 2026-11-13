@@ -46,18 +46,16 @@ export class YatzyGame {
     this.#dice.reset();
   }
 
-  /**
+    /**
    * Rolls every die that isn't held (up to 3 rolls per turn).
-   * The roll only counts once the server has sent the dice values.
-   * Failed requests don't use up one of the player's rolls.
-   * @returns {Promise<number[]>} the dice values after the roll
+   * @returns {number[]} the dice values after the roll
    */
-  async roll() {
+  roll() {
     this.#checkInProgress();
     if (this.#rollsUsed >= MAX_ROLLS) {
       throw new Error(`No rolls left this turn (maximum ${MAX_ROLLS})`);
     }
-    const values = await this.#dice.rollAll();
+    const values = this.#dice.rollAll();
     this.#rollsUsed++;
     return values;
   }
@@ -65,11 +63,15 @@ export class YatzyGame {
   /**
    * Holds or releases one die between rolls.
    * @param {number} index - position of the die (0-4)
+   * @param {boolean} held - true tokep the die, false to release it
    * @returns {boolean} the die's new held state
    */
-  toggleHold(index) {
+  setHold(index, held) {
     this.#checkInProgress();
-    return this.#dice.toggleHold(index);
+    if (this.#rollsUsed === 0) {
+      throw new Error("Roll the dice before choosing which to keep");
+    }
+    return this.#dice.setHold(index, held);
   }
 
   /**
@@ -117,6 +119,30 @@ export class YatzyGame {
       .filter((player) => player.total === topScore)
       .map((player) => player.name);
     return { winners, standings };
+  }
+
+  /**
+   * A plain-object snapshot of the game, sent tot he browser as JSON.
+   * The browser draws the page from this but never changes the game itself.
+   * @returns {object} everything the page needs to display the game
+   */
+  getState() {
+    return {
+      currentPlayer: this.currentPlayer,
+      currentRound: this.currentRound,
+      totalRounds: TOTAL_ROUNDS,
+      rollsLeft: this.rollsLeft,
+      diceValues: this.diceValues,
+      heldDice: this.heldDice,
+      scoreTable: this.scoreTable,
+      previewScores: this.previewScores,
+      upperTotal: this.upperTotal,
+      bonus: this.bonus,
+      lowerTotal: this.lowerTotal,
+      totalScore: this.totalScore,
+      isOver: this.isOver,
+      standings: this.standings,
+    };
   }
 
   // --- Getters ---
