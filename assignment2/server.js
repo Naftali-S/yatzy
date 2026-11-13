@@ -5,8 +5,8 @@
  * - Rolls the dice: GET /roll-dices returns five random dice values
  */
 
-const path = require("path");
-const express = require("express");
+import path from "node:path";
+import express from "express";
 
 const app = express();
 const PORT = 3000;
@@ -15,7 +15,7 @@ const DICE_COUNT = 5;
 const SIDES = 6;
 
 // Serve index.html, css, and js from the public folder
-app.use(express.static(path.join(__dirname, "public")));
+app.use(express.static(path.join(import.meta.dirname, "public")));
 
 /**
  * Rolls a single die. (Moved here from the Dice class's roll().)
