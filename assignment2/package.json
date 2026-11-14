@@ -1,0 +1,16 @@
+{
+  "name": "yatzy-assignment2",
+  "version": "1.0.0",
+  "description": "Yatzy game with a Node.js and Express server that manages game state and scoring",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "author": "Naftali Segal",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^5.3.0"
+  }
+}
