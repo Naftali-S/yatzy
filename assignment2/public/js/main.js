@@ -1,13 +1,12 @@
 /**
  * main.js
- * Connects the YatzyGame class to the page. It reads the game state,
- * updates the HTML and handles the player's clicks.
- * Lab 8: the roll animation is done with jQuery and the new dice values
- * are only shown once the animation finishes.
+ * Draws the game and handles the player's clicks. Assignment 2: every move
+ * is sent to the server with fetch (see api.js), and the page is redrawn from
+ * the game state the server sends back. No rules or scoring run in the browser.
+ * The roll animation is done with jQuery (from Lab 8).
  */
 
-import { YatzyGame } from "./yatzy_game.js";
-import { CATEGORIES } from "./yatzy_engine.js";
+import * as api from "./api.js";
 
 // --- Page elements ---
 const diceButtons = document.querySelectorAll(".die");
@@ -45,9 +44,11 @@ const WOBBLE_DEGREES = 15; // how far the dice rock side to side at the start
 const HOP_PX = 10; // how high the dice hop
 
 // --- Game State ---
-const game = new YatzyGame();
+const SAVED_GAME_KEY = "yatzyGameId"; // localStorage key, so a refresh keeps the game
+let gameId = null; // id of this game on the server
+let state = null; // the latest game state sent by the server
 let selectedCategory = null;
-let isRolling = false; // true while waiting for the server to send the dice
+let isWaiting = true; // true while waiting for the server (starts true until the game loads)
 
 // --- Drawing the page ---
 
@@ -65,8 +66,8 @@ function render() {
  * Draws the five dice: pips, held state and screen reader label.
  */
 function renderDice() {
-  const values = game.diceValues;
-  const held = game.heldDice;
+  const values = state.diceValues;
+  const held = state.heldDice;
 
   diceButtons.forEach((button, i) => {
     const value = values[i];
@@ -89,7 +90,7 @@ function renderDice() {
     }
 
     button.classList.toggle("held", held[i]);
-    button.disabled = value === null || game.isOver;
+    button.disabled = value === null || state.isOver;
 
     // pressed tells screen readers this is an on/off (kept/not kept) button
     button.setAttribute("aria-pressed", held[i]);
@@ -111,7 +112,7 @@ function createPip(position) {
  * Fills one gold marker per roll still available
  */
 function renderRollsLeft() {
-  const rollsLeft = game.rollsLeft;
+  const rollsLeft = state.rollsLeft;
   rollMarkers.forEach((marker, i) => {
     marker.classList.toggle("available", i < rollsLeft);
   });
@@ -127,13 +128,13 @@ function renderRollsLeft() {
  * Turns the buttons on or off and updates the round number.
  */
 function renderControls() {
-  rollButton.disabled = isRolling || game.rollsLeft === 0 || game.isOver;
+  rollButton.disabled = isWaiting || state.rollsLeft === 0 || state.isOver;
   endTurnButton.disabled =
-    isRolling || selectedCategory === null || game.isOver;
-  roundStatus.textContent = `Round ${game.currentRound} of ${CATEGORIES.length}`;
+    isWaiting || selectedCategory === null || state.isOver;
+  roundStatus.textContent = `Round ${state.currentRound} of ${state.totalRounds}`;
 
   // Once the game is over, the End Game link starts a new game instead
-  if (game.isOver) {
+  if (state.isOver) {
     endGameButton.textContent = "New game";
   } else {
     endGameButton.textContent = "End game";
@@ -145,8 +146,8 @@ function renderControls() {
  * the selected box and the totals
  */
 function renderScorecard() {
-  const scores = game.scoreTable;
-  const previews = game.previewScores; // empty before the first roll
+  const scores = state.scoreTable;
+  const previews = state.previewScores; // empty before the first roll
 
   scoreRows.forEach((row) => {
     const category = row.dataset.category;
@@ -161,7 +162,7 @@ function renderScorecard() {
       row.classList.add("filled");
       row.removeAttribute("tabindex"); // can't be chosen again
       cell.textContent = scores[category];
-    } else if (category in previews && !game.isOver) {
+    } else if (category in previews && !state.isOver) {
       // Open this turn: show what the dice would score
       row.classList.add("open");
       row.tabIndex = 0; // reachable with Tab
@@ -178,10 +179,10 @@ function renderScorecard() {
     }
   });
 
-  upperTotalCell.textContent = game.upperTotal;
-  bonusCell.textContent = game.bonus;
-  lowerTotalCell.textContent = game.lowerTotal;
-  grandTotalCell.textContent = game.totalScore;
+  upperTotalCell.textContent = state.upperTotal;
+  bonusCell.textContent = state.bonus;
+  lowerTotalCell.textContent = state.lowerTotal;
+  grandTotalCell.textContent = state.totalScore;
 }
 
 /**
@@ -217,7 +218,7 @@ function showMessage(text) {
  * Opens the game over pop-up with the final score and a message.
  */
 function showGameOver() {
-  const total = game.totalScore;
+  const total = state.totalScore;
   finalScoreText.textContent = total;
   finalMessageText.textContent = finalMessage(total);
   showMessage(`Game over. Your final score is ${pointsText(total)}.`);
@@ -230,7 +231,7 @@ function showGameOver() {
  * @returns {string}
  */
 function finalMessage(total) {
-  const roundsPlayed = CATEGORIES.length - countOpenBoxes();
+  const roundsPlayed = state.totalRounds - countOpenBoxes();
 
   let message;
   if (total >= 250) {
@@ -243,8 +244,8 @@ function finalMessage(total) {
     message = "Tough luck with the dice this time. Try again?";
   }
 
-  if (roundsPlayed < CATEGORIES.length) {
-    message = `You ended the game after ${roundsPlayed} of ${CATEGORIES.length} rounds. ${message}`;
+  if (roundsPlayed < state.totalRounds) {
+    message = `You ended the game after ${roundsPlayed} of ${state.totalRounds} rounds. ${message}`;
   }
   return message;
 }
@@ -254,7 +255,7 @@ function finalMessage(total) {
  * @returns {number}
  */
 function countOpenBoxes() {
-  return Object.values(game.scoreTable).filter((score) => score === null)
+  return Object.values(state.scoreTable).filter((score) => score === null)
     .length;
 }
 
@@ -292,7 +293,8 @@ function spinDice($dice) {
         easing: "linear", // the settling is done by the math below
         step: function (now) {
           // Rocks back and forth, getting smaller as now goes from 0 to 1
-          const angle = Math.sin(now * Math.PI * 4) * WOBBLE_DEGREES * (1 - now);
+          const angle =
+            Math.sin(now * Math.PI * 4) * WOBBLE_DEGREES * (1 - now);
           // One arc up and back down (negative = up on screen)
           const lift = Math.sin(now * Math.PI) * -HOP_PX;
 
@@ -309,6 +311,104 @@ function spinDice($dice) {
     .promise();
 }
 
+// --- Talking to the server ---
+
+/**
+ * Remembers the game id (in memory and in localStorage) so a page refresh
+ * continues the same game. Pass null to forget it.
+ * @param {string|null} id
+ */
+function rememberGame(id) {
+  gameId = id;
+  try {
+    if (id === null) {
+      localStorage.removeItem(SAVED_GAME_KEY);
+    } else {
+      localStorage.setItem(SAVED_GAME_KEY, id);
+    }
+  } catch {
+    // Storage is blocked (e.g. private mode): the game still works, it just won't resume
+  }
+}
+
+/**
+ * @returns {string|null} the id saved by rememberGame, or null
+ */
+function savedGameId() {
+  try {
+    return localStorage.getItem(SAVED_GAME_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Asks the server for a new game and makes it the current one.
+ * Doesn't redraw the page (the caller does that).
+ */
+async function startNewGame() {
+  state = await api.startGame();
+  rememberGame(state.gameId);
+  selectedCategory = null;
+}
+
+/**
+ * Shows a failed request to the player. If the server no longer has this
+ * game (it restarted, or the game expired), a new game is started instead.
+ * @param {Error} error - from api.js; error.status is the HTTP status
+ */
+async function handleRequestError(error) {
+  console.error(error);
+  if (error.status === 404) {
+    try {
+      await startNewGame();
+    } catch (startError) {
+      showMessage(startError.message);
+      return;
+    }
+    render();
+    showMessage(
+      "That game is no longer on the server, so a new game has started.",
+    );
+    return;
+  }
+  render(); // puts the page back the way it was
+  showMessage(error.message);
+}
+
+/**
+ * Runs when the page loads: continues the saved game if the server still
+ * has it, otherwise starts a new one.
+ */
+async function init() {
+  const savedId = savedGameId();
+  if (savedId !== null) {
+    try {
+      state = await api.getGame(savedId);
+      gameId = savedId;
+      isWaiting = false;
+      render();
+      showMessage("Welcome back. Your game has been restored.");
+      if (state.isOver) {
+        showGameOver();
+      }
+      return;
+    } catch {
+      // The saved game is gone: fall through and start a new one
+    }
+  }
+
+  try {
+    await startNewGame();
+  } catch (error) {
+    showMessage(error.message);
+    return; // buttons stay disabled until the server is running and the page is reloaded
+  }
+  isWaiting = false;
+  render();
+  showMessage("Roll the dice to start your turn.");
+}
+
 // --- Event handlers ---
 
 /**
@@ -318,17 +418,17 @@ function spinDice($dice) {
  * and the error is shown.
  */
 async function handleRoll() {
-  if (isRolling) {
-    return; // a roll is already waiting on the server
+  if (isWaiting) {
+    return; // already waiting on the server
   }
 
-  // The dice that aren't held are those that get rolled
+  // The dice that aren't held are the ones that get rolled
   const rolledIndexes = [];
-  game.heldDice.forEach((isHeld, i) => {
+  state.heldDice.forEach((isHeld, i) => {
     if (!isHeld) rolledIndexes.push(i);
   });
 
-  isRolling = true;
+  isWaiting = true;
   renderControls();
   showMessage("Rolling...");
 
@@ -338,23 +438,22 @@ async function handleRoll() {
   });
 
   // Start the server request and the spin at the same time
-  const serverRoll = game.roll();
+  const serverRoll = api.rollDice(gameId);
   const spin = spinDice($rollingDice);
 
   // Wait for both. allSettled waits even if the request fails
   const [rollResult] = await Promise.allSettled([serverRoll, spin]);
 
-  isRolling = false;
+  isWaiting = false;
 
   if (rollResult.status === "rejected") {
-    console.error("Roll failed:", rollResult.reason);
-    render(); // puts the old faces back and unlocks the buttons
-    showMessage(rollResult.reason.message);
+    await handleRequestError(rollResult.reason);
     return;
   }
 
-  selectedCategory = null; // Dice change so player chooses again
-  render(); // reveal the real values from the server
+  state = rollResult.value; // the new dice, rolls left and score previews
+  selectedCategory = null; // dice changed, so the player chooses again
+  render();
   showMessage(rollMessage());
 }
 
@@ -363,7 +462,7 @@ async function handleRoll() {
  * @returns {string}
  */
 function rollMessage() {
-  switch (game.rollsLeft) {
+  switch (state.rollsLeft) {
     case 2:
       return "Click any dice you want to keep, then roll again.";
     case 1:
@@ -374,20 +473,28 @@ function rollMessage() {
 }
 
 /**
- * Clicking a die keeps it (or releases it) from the next roll.
+ * Clicking a die asks the server to keep it (or release it) for the next roll.
  * @param {MouseEvent} event
  */
-function handleDieClick(event) {
-  if (isRolling) {
-    return; // don't change which dice are kept in the middle of a roll
+async function handleDieClick(event) {
+  if (isWaiting) {
+    return; // don't change which dice are kept while waiting on the server
   }
   const index = Number(event.currentTarget.dataset.index);
+  const keep = !state.heldDice[index];
+
+  isWaiting = true;
+  let newState;
   try {
-    game.toggleHold(index);
+    newState = await api.setHold(gameId, index, keep);
   } catch (error) {
-    showMessage(error.message);
+    isWaiting = false;
+    await handleRequestError(error);
     return;
   }
+  isWaiting = false;
+
+  state = newState;
   renderDice();
 }
 
@@ -398,7 +505,7 @@ function handleDieClick(event) {
  */
 function handleScoreClick(event) {
   const row = event.currentTarget;
-  if (isRolling || !row.classList.contains("open")) {
+  if (isWaiting || !row.classList.contains("open")) {
     return; // already scored, or no roll yet
   }
 
@@ -408,7 +515,7 @@ function handleScoreClick(event) {
     showMessage("Choose a box to score, then press End Turn.");
   } else {
     selectedCategory = category;
-    const points = game.previewScores[category];
+    const points = state.previewScores[category];
     showMessage(
       `${categoryName(row)} for ${pointsText(points)}. Press End Turn to score it.`,
     );
@@ -430,44 +537,51 @@ function handleScoreKey(event) {
 }
 
 /**
- * End Turn: records the selected box and moves on to the next round.
+ * End Turn: sends the selected box to the server, which scores it and
+ * moves on to the next round.
  */
-function handleEndTurn() {
-  if (selectedCategory === null) {
+async function handleEndTurn() {
+  if (isWaiting || selectedCategory === null) {
     return;
   }
-
   const row = document.querySelector(`tr[data-category="${selectedCategory}"]`);
-  let score;
+
+  isWaiting = true;
+  renderControls();
+  let result;
   try {
-    score = game.endTurn(selectedCategory);
+    result = await api.scoreCategory(gameId, selectedCategory);
   } catch (error) {
-    showMessage(error.message);
+    isWaiting = false;
+    await handleRequestError(error);
     return;
   }
+  isWaiting = false;
 
+  state = result;
   selectedCategory = null;
   render();
 
-  // After the last round, YatzyGame ends the game by itself
-  if (game.isOver) {
+  // After the last round, the server ends the game by itself
+  if (state.isOver) {
     showGameOver();
     return;
   }
   showMessage(
-    `${categoryName(row)}: ${pointsText(score)}. Roll the dice to start round ${game.currentRound}.`,
+    `${categoryName(row)}: ${pointsText(result.scored.points)}. Roll the dice to start round ${state.currentRound}.`,
   );
 }
 
 /**
- * End Game: lets the player stop early after confirming.
+ * End Game: lets the player stop early after confirming. The server ends
+ * the game, sends back the final scores and removes it.
  * Once the game is over the same link starts a new game.
  */
-function handleEndGame() {
-  if (isRolling) {
+async function handleEndGame() {
+  if (isWaiting) {
     return;
   }
-  if (game.isOver) {
+  if (state.isOver) {
     handleNewGame();
     return;
   }
@@ -479,19 +593,53 @@ function handleEndGame() {
     return;
   }
 
-  game.endGame();
+  isWaiting = true;
+  let finalState;
+  try {
+    finalState = await api.endGame(gameId);
+  } catch (error) {
+    isWaiting = false;
+    await handleRequestError(error);
+    return;
+  }
+  isWaiting = false;
+
+  state = finalState;
+  rememberGame(null); // the server has removed this game
   selectedCategory = null;
   render();
   showGameOver();
 }
 
 /**
- * Play Again / New Game: resets everything for a new game.
+ * Play Again / New Game: removes the finished game from the server
+ * and starts a new one.
  */
-function handleNewGame() {
-  game.startNewGame();
-  selectedCategory = null;
+async function handleNewGame() {
+  if (isWaiting) {
+    return;
+  }
+  isWaiting = true;
   gameOverDialog.close();
+
+  // A game that ended after round 15 is still on the server, so remove it.
+  // (If End Game was used, it's already gone and gameId is null.)
+  if (gameId !== null) {
+    try {
+      await api.endGame(gameId);
+    } catch {
+      // Already gone (e.g. the server restarted): nothing to clean up
+    }
+  }
+
+  try {
+    await startNewGame();
+  } catch (error) {
+    isWaiting = false;
+    showMessage(error.message);
+    return;
+  }
+  isWaiting = false;
   render();
   showMessage("New game. Roll the dice to start your turn.");
 }
@@ -514,5 +662,5 @@ diceButtons.forEach((button) => {
   button.addEventListener("click", handleDieClick);
 });
 
-// Draw the starting state
-render();
+// Load the game from the server, then draw it
+init();
